@@ -1088,7 +1088,7 @@ def main():
     # Configuration
     TASK_FILE = "webarena_task.json"
     N_TRIALS = 10  # Number of trials per task for statistical validity
-    MAX_TASKS = None  # Set to limit tasks (e.g., 5 for testing), None for all
+    MAX_TASKS = 50  # Limit to 50 tasks for evaluation
 
     # Check for API keys
     openai_key = os.getenv("OPENAI_API_KEY")
