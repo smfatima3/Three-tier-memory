@@ -681,32 +681,33 @@ class LCACoordinator:
         np.random.seed(seed)
         random.seed(seed)
 
-        # High-level planning: distribute task into sub-tasks
+        # High-level planning: distribute task to multiple agents for voting
         urls_to_process = [task.start_url]
         if task.target_url and task.target_url != task.start_url:
             urls_to_process.append(task.target_url)
 
-        # Create parallel sub-tasks
-        n_parallel_tasks = min(3, self.n_agents)  # Use up to 3 agents in parallel
-        task_replications = [task.intent for _ in range(n_parallel_tasks)]
+        # Use multiple agents for voting (at least 3 for meaningful threshold)
+        n_parallel_agents = min(3, self.n_agents)  # Use 3 agents for voting
 
         results = []
         success_votes = 0
         total_time = 0
 
         # Parallel execution with coordination
+        # Each URL is processed by multiple agents for voting
         with ThreadPoolExecutor(max_workers=self.n_agents) as executor:
-            future_to_url = {}
+            future_to_info = {}
 
             for url in urls_to_process:
-                # Assign to best agent based on alignment
-                agent = self.assign_task(url)
-                future = executor.submit(agent.process_url, url, task.intent)
-                future_to_url[future] = (url, agent.agent_id)
+                # Assign multiple agents to same URL for voting
+                for _ in range(n_parallel_agents):
+                    agent = self.assign_task(url)
+                    future = executor.submit(agent.process_url, url, task.intent)
+                    future_to_info[future] = (url, agent.agent_id)
 
             # Collect results
-            for future in as_completed(future_to_url):
-                url, agent_id = future_to_url[future]
+            for future in as_completed(future_to_info):
+                url, agent_id = future_to_info[future]
                 try:
                     result = future.result()
                     results.append(result)
@@ -732,11 +733,23 @@ class LCACoordinator:
         for r in results:
             all_data.update(r.data_extracted)
 
+        # Collect individual agent outcomes for debugging
+        agent_outcomes = [
+            {
+                'agent_id': r.agent_id,
+                'success': r.success,
+                'error': r.error,
+                'time': r.execution_time
+            }
+            for r in results
+        ]
+
         return {
             'success': overall_success,
             'success_ratio': success_ratio,
             'total_time': total_time / len(results) if results else 0,
             'num_agents_used': len(set(r.agent_id for r in results)),
+            'agent_outcomes': agent_outcomes,
             'results': results,
             'data': all_data
         }
@@ -778,16 +791,22 @@ class LCAAgent(BaseAgent):
             # Extract summary
             success = coord_result['success']
             data = coord_result['data']
+            success_ratio = coord_result['success_ratio']
 
             answer = f"LCA processed with {coord_result['num_agents_used']} agents, " \
-                    f"success ratio: {coord_result['success_ratio']:.2f}, " \
+                    f"success ratio: {success_ratio:.2f}, " \
                     f"title: {data.get('title', 'N/A')}"
+
+            # Determine error message if failed coordination threshold
+            error_msg = None
+            if not success:
+                error_msg = f"Failed coordination threshold (ratio={success_ratio:.2f} < τ={self.coordinator.tau})"
 
             # Compute quality
             result_dict = {
                 'success': success,
                 'answer': answer,
-                'error': None
+                'error': error_msg
             }
             quality = compute_quality_score(result_dict)
 
@@ -795,10 +814,12 @@ class LCAAgent(BaseAgent):
                 task.task_id, self.name, trial_num, seed,
                 success, exec_time, quality,
                 answer=answer,
+                error=error_msg,
                 metadata={
                     'success_ratio': coord_result['success_ratio'],
                     'num_agents_used': coord_result['num_agents_used'],
                     'coordination_threshold': self.coordinator.tau,
+                    'agent_outcomes': coord_result.get('agent_outcomes', []),
                     **data
                 }
             )
@@ -876,8 +897,11 @@ class StatisticalEvaluator:
                     if result.success:
                         print(f"✓ {result.execution_time:.2f}s (Q={result.quality_score:.2f})")
                     else:
-                        error_msg = result.error[:30] if result.error else "Unknown"
-                        print(f"✗ {error_msg}")
+                        if result.error:
+                            error_msg = result.error[:60] if len(result.error) > 60 else result.error
+                            print(f"✗ {error_msg}")
+                        else:
+                            print(f"✗ Failed (no error message - check success criteria)")
 
         # Cleanup browser agents
         for agent in browser_agents:
