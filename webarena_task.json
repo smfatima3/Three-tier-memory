@@ -1,0 +1,48 @@
+[
+  {
+    "task_id": "wa_001",
+    "intent": "Search for information about climate change on Wikipedia",
+    "start_url": "https://en.wikipedia.org/wiki/Main_Page",
+    "target_url": "https://en.wikipedia.org/wiki/Climate_change",
+    "success_criteria": {
+      "has_search_results": true,
+      "relevant_content": true
+    }
+  },
+  {
+    "task_id": "wa_002",
+    "intent": "Navigate to the Python documentation homepage",
+    "start_url": "https://www.python.org",
+    "target_url": "https://docs.python.org",
+    "success_criteria": {
+      "documentation_visible": true
+    }
+  },
+  {
+    "task_id": "wa_003",
+    "intent": "Find information about machine learning on arXiv",
+    "start_url": "https://arxiv.org",
+    "target_url": "https://arxiv.org/list/cs.LG/recent",
+    "success_criteria": {
+      "papers_listed": true
+    }
+  },
+  {
+    "task_id": "wa_004",
+    "intent": "Search for recent AI research papers on Google Scholar",
+    "start_url": "https://scholar.google.com",
+    "success_criteria": {
+      "search_functional": true,
+      "results_displayed": true
+    }
+  },
+  {
+    "task_id": "wa_005",
+    "intent": "Navigate to GitHub trending repositories page",
+    "start_url": "https://github.com",
+    "target_url": "https://github.com/trending",
+    "success_criteria": {
+      "trending_visible": true
+    }
+  }
+]
