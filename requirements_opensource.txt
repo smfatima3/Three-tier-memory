@@ -1,0 +1,18 @@
+# Open Source WebArena Evaluation Requirements
+
+# Core ML/DL
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+bitsandbytes>=0.41.0
+
+# Data & Statistics
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+
+# Browser Automation
+selenium>=4.15.0
+
+# Optional: For Colab
+google-colab  # Only in Colab environment
