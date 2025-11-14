@@ -172,6 +172,24 @@ class TrialResult:
 
 # ============== TASK LOADER ==============
 
+# WebArena placeholder mapping - configure these to match your deployed instances
+WEBARENA_PLACEHOLDERS = {
+    '__SHOPPING__': os.getenv('WEBARENA_SHOPPING', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:7770'),
+    '__REDDIT__': os.getenv('WEBARENA_REDDIT', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:9999'),
+    '__GITLAB__': os.getenv('WEBARENA_GITLAB', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:8023'),
+    '__WIKIPEDIA__': os.getenv('WEBARENA_WIKIPEDIA', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:8888'),
+    '__MAP__': os.getenv('WEBARENA_MAP', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:3000'),
+    '__HOMEPAGE__': os.getenv('WEBARENA_HOMEPAGE', 'http://ec2-3-131-244-37.us-east-2.compute.amazonaws.com:4399'),
+}
+
+def replace_webarena_placeholders(url: str) -> str:
+    """Replace WebArena placeholder domains with actual URLs"""
+    for placeholder, real_url in WEBARENA_PLACEHOLDERS.items():
+        if url.startswith(placeholder):
+            # Replace placeholder with real URL
+            return url.replace(placeholder, real_url)
+    return url
+
 def load_webarena_tasks(json_path: str = "webarena_task.json") -> List[WebArenaTask]:
     """Load real WebArena tasks from JSON file"""
 
@@ -200,12 +218,20 @@ def load_webarena_tasks(json_path: str = "webarena_task.json") -> List[WebArenaT
     tasks = []
     for item in tasks_data:
         try:
-            # Extract and validate URL
+            # Extract URL
             url = item.get('start_url', item.get('url', 'http://example.com'))
 
-            # Skip malformed URLs with placeholders
-            if '__' in url or not url.startswith(('http://', 'https://')):
-                print(f"⚠️  Skipping malformed URL: {url}")
+            # Replace WebArena placeholders with actual URLs
+            url = replace_webarena_placeholders(url)
+
+            # Now validate - skip if still has placeholders after replacement
+            if '__' in url:
+                print(f"⚠️  Skipping unmapped placeholder: {url}")
+                print(f"    Set environment variable or update WEBARENA_PLACEHOLDERS")
+                continue
+
+            if not url.startswith(('http://', 'https://')):
+                print(f"⚠️  Skipping invalid URL: {url}")
                 continue
 
             task = WebArenaTask(
