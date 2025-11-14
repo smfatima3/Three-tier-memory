@@ -74,12 +74,12 @@ except ImportError:
 def create_chrome_driver(headless: bool = True):
     """Create Chrome WebDriver with robust configuration"""
     is_colab = 'google.colab' in sys.modules
-    
+
     options = ChromeOptions()
-    
+
     if headless:
         options.add_argument('--headless=new')
-    
+
     # Essential stability options
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
@@ -87,7 +87,12 @@ def create_chrome_driver(headless: bool = True):
     options.add_argument('--disable-software-rasterizer')
     options.add_argument('--disable-extensions')
     options.add_argument('--disable-setuid-sandbox')
-    
+
+    # DNS and Network fixes for ERR_NAME_NO
+    options.add_argument('--disable-features=NetworkService')
+    options.add_argument('--dns-prefetch-disable')
+    options.add_argument('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost')
+
     # Additional stability
     options.add_argument('--window-size=1920,1080')
     options.add_argument('--disable-blink-features=AutomationControlled')
@@ -95,20 +100,21 @@ def create_chrome_driver(headless: bool = True):
     options.add_argument('--disable-logging')
     options.add_argument('--log-level=3')
     options.add_argument('--silent')
-    
+
     # User agent
     options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
+
     # Experimental options
     options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging'])
     options.add_experimental_option('useAutomationExtension', False)
-    
+
     # Prefs
     prefs = {
         'profile.default_content_setting_values': {
             'notifications': 2,
             'automatic_downloads': 2
-        }
+        },
+        'dns_prefetching.enabled': False
     }
     options.add_experimental_option('prefs', prefs)
     
@@ -320,23 +326,24 @@ Provide specific, actionable steps that could be executed by a browser automatio
                 error=str(e)[:100]
             )
 
-# ============== CLAUDE AGENT ==============
+# ============== CLAUDE AGENTS ==============
 
 class ClaudeAgent(BaseAgent):
     """Claude agent using Anthropic API"""
-    
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
-        super().__init__("Claude-3.5")
+
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022", name: str = None):
+        model_name = name if name else f"Claude-{model.split('-')[1]}"
+        super().__init__(model_name)
         self.api_key = api_key
         self.model = model
         self.client = None
-        
+
         try:
             import anthropic
             self.client = anthropic.Anthropic(api_key=api_key)
-            print(f"✓ Claude initialized (model: {model})")
+            print(f"✓ {self.name} initialized (model: {model})")
         except Exception as e:
-            print(f"✗ Claude initialization failed: {e}")
+            print(f"✗ {self.name} initialization failed: {e}")
             raise
     
     def run_trial(self, task: WebArenaTask, trial_num: int, seed: int) -> TrialResult:
@@ -382,6 +389,58 @@ Provide specific, actionable steps that could be executed by a browser automatio
                 False, exec_time, quality,
                 error=str(e)[:100]
             )
+
+# ============== MULTI-AGENT WRAPPER ==============
+
+class MultiAgent(BaseAgent):
+    """Multi-agent wrapper that coordinates multiple instances of any agent type"""
+
+    def __init__(self, base_agent_class, agent_kwargs: dict, n_agents: int = 5, name_suffix: str = ""):
+        name = f"{agent_kwargs.get('name', base_agent_class.__name__)}-Multi{n_agents}{name_suffix}"
+        super().__init__(name)
+        self.base_agent_class = base_agent_class
+        self.agent_kwargs = agent_kwargs
+        self.n_agents = n_agents
+        self.agents = []
+
+        # Initialize multiple agent instances
+        for i in range(n_agents):
+            try:
+                kwargs = agent_kwargs.copy()
+                if 'name' in kwargs:
+                    kwargs['name'] = f"{kwargs['name']}-{i+1}"
+                agent = base_agent_class(**kwargs)
+                self.agents.append(agent)
+            except Exception as e:
+                print(f"⚠️  Failed to initialize agent {i+1}/{n_agents}: {e}")
+
+        if self.agents:
+            print(f"✓ Multi-agent initialized with {len(self.agents)}/{n_agents} agents")
+        else:
+            raise RuntimeError(f"Failed to initialize any agents for {name}")
+
+    def run_trial(self, task: WebArenaTask, trial_num: int, seed: int) -> TrialResult:
+        """Run trial using round-robin agent selection"""
+        agent_idx = (trial_num + seed) % len(self.agents)
+        selected_agent = self.agents[agent_idx]
+
+        # Run trial with selected agent
+        result = selected_agent.run_trial(task, trial_num, seed)
+
+        # Update result to reflect multi-agent name
+        result.agent_name = self.name
+        result.metadata['sub_agent'] = selected_agent.name
+        result.metadata['agent_index'] = agent_idx
+
+        return result
+
+    def cleanup(self):
+        """Cleanup all agents"""
+        for agent in self.agents:
+            try:
+                agent.cleanup()
+            except:
+                pass
 
 # ============== LCA AGENT (REAL IMPLEMENTATION) ==============
 
@@ -503,13 +562,23 @@ class LCAAgent(BaseAgent):
             self._update_shared_context()
             alignment_score = self._compute_context_alignment(task)
             
-            # Navigate to URL
-            self.driver.get(task.start_url)
-            
-            # Wait for page load
-            WebDriverWait(self.driver, 30).until(
-                lambda d: d.execute_script('return document.readyState') == 'complete'
-            )
+            # Navigate to URL with DNS error handling
+            try:
+                # Test DNS resolution first
+                import socket
+                from urllib.parse import urlparse
+                hostname = urlparse(task.start_url).hostname
+                if hostname:
+                    socket.gethostbyname(hostname)
+
+                self.driver.get(task.start_url)
+
+                # Wait for page load
+                WebDriverWait(self.driver, 30).until(
+                    lambda d: d.execute_script('return document.readyState') == 'complete'
+                )
+            except socket.gaierror as dns_err:
+                raise Exception(f"DNS resolution failed for {task.start_url}: {dns_err}")
             
             # Extract page information
             page_info = {}
@@ -1035,37 +1104,66 @@ def main():
     # Initialize agents
     print("\n🤖 Initializing agents...")
     agents = []
-    
-    # GPT-4
+
+    # GPT-4 Multi-Agent
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         try:
-            agents.append(GPT4Agent(openai_key))
+            agents.append(MultiAgent(
+                GPT4Agent,
+                {'api_key': openai_key, 'model': 'gpt-4o-mini'},
+                n_agents=5,
+                name_suffix=""
+            ))
         except Exception as e:
-            print(f"⚠️  GPT-4 initialization failed: {e}")
+            print(f"⚠️  GPT-4 Multi-Agent initialization failed: {e}")
     else:
         print("⚠️  OPENAI_API_KEY not set - GPT-4 skipped")
-    
-    # Claude
+
+    # Claude Sonnet 4 Multi-Agent
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     if anthropic_key:
         try:
-            agents.append(ClaudeAgent(anthropic_key))
+            agents.append(MultiAgent(
+                ClaudeAgent,
+                {'api_key': anthropic_key, 'model': 'claude-sonnet-4-20250514', 'name': 'Claude-Sonnet-4'},
+                n_agents=5,
+                name_suffix=""
+            ))
         except Exception as e:
-            print(f"⚠️  Claude initialization failed: {e}")
+            print(f"⚠️  Claude Sonnet 4 Multi-Agent initialization failed: {e}")
     else:
-        print("⚠️  ANTHROPIC_API_KEY not set - Claude skipped")
-    
-    # LCA
+        print("⚠️  ANTHROPIC_API_KEY not set - Claude Sonnet skipped")
+
+    # Claude Haiku 3.5 Multi-Agent
+    if anthropic_key:
+        try:
+            agents.append(MultiAgent(
+                ClaudeAgent,
+                {'api_key': anthropic_key, 'model': 'claude-3-5-haiku-20241022', 'name': 'Claude-Haiku-3.5'},
+                n_agents=5,
+                name_suffix=""
+            ))
+        except Exception as e:
+            print(f"⚠️  Claude Haiku Multi-Agent initialization failed: {e}")
+
+    # LCA Multi-Agent
     if SELENIUM_AVAILABLE:
         try:
             # Test Chrome setup
             test_driver = create_chrome_driver()
             test_driver.get("data:text/html,<html><body>Test</body></html>")
             test_driver.quit()
-            agents.append(LCAAgent(coordination_threshold=0.65))
+
+            # Create multiple LCA agents
+            agents.append(MultiAgent(
+                LCAAgent,
+                {'coordination_threshold': 0.65},
+                n_agents=5,
+                name_suffix=""
+            ))
         except Exception as e:
-            print(f"⚠️  Chrome setup failed - LCA skipped")
+            print(f"⚠️  Chrome setup failed - LCA Multi-Agent skipped")
             print(f"   Error: {e}")
             print("\n   Setup instructions:")
             print("   Colab: !apt-get install -y chromium-chromedriver")
